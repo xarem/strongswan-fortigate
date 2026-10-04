@@ -1,0 +1,41 @@
+diff --git a/src/libcharon/plugins/eap_ttls/eap_ttls.c b/src/libcharon/plugins/eap_ttls/eap_ttls.c
+index 3df78bb..ec08867 100644
+--- a/src/libcharon/plugins/eap_ttls/eap_ttls.c
++++ b/src/libcharon/plugins/eap_ttls/eap_ttls.c
+@@ -175,6 +175,7 @@ static eap_ttls_t *eap_ttls_create(identification_t *server,
+ 	int max_msg_count;
+ 	bool include_length;
+ 	tls_t *tls;
++	identification_t *tls_server;
+ 
+ 	INIT(this,
+ 		.public = {
+@@ -209,8 +210,27 @@ static eap_ttls_t *eap_ttls_create(identification_t *server,
+ 					lib->ns);
+ 	include_length = lib->settings->get_bool(lib->settings,
+ 					"%s.plugins.eap-ttls.include_length", TRUE, lib->ns);
+-	tls = tls_create(is_server, server, peer, TLS_PURPOSE_EAP_TTLS,
++	tls_server = server;
++	if (!is_server)
++	{
++		/* The gateway's inner-TLS certificate is checked against the IKE peer
++		 * identity, which for FortiGates is the gateway IP and never matches the
++		 * certificate name. server_id overrides it; "%any" accepts any name (the
++		 * CA chain is still verified), mirroring FortiClient, since the outer
++		 * IKE_SA already authenticates the gateway by PSK. */
++		char *server_id = lib->settings->get_str(lib->settings,
++						"%s.plugins.eap-ttls.server_id", NULL, lib->ns);
++		if (server_id)
++		{
++			tls_server = identification_create_from_string(server_id);
++		}
++	}
++	tls = tls_create(is_server, tls_server, peer, TLS_PURPOSE_EAP_TTLS,
+ 					 application, NULL, 0);
++	if (tls_server != server)
++	{
++		tls_server->destroy(tls_server);
++	}
+ 	this->tls_eap = tls_eap_create(EAP_TTLS, tls, frag_size, max_msg_count,
+ 												  include_length);
+ 	if (!this->tls_eap)
