@@ -1,0 +1,78 @@
+diff --git a/src/libcharon/plugins/eap_ttls/eap_ttls_peer.c b/src/libcharon/plugins/eap_ttls/eap_ttls_peer.c
+index f8229f5..1bcaee3 100644
+--- a/src/libcharon/plugins/eap_ttls/eap_ttls_peer.c
++++ b/src/libcharon/plugins/eap_ttls/eap_ttls_peer.c
+@@ -49,6 +49,11 @@ struct private_eap_ttls_peer_t {
+ 	 */
+ 	bool start_phase2;
+ 
++	/**
++	 * Send User-Name/User-Password AVPs (PAP) instead of a tunneled EAP method
++	 */
++	bool pap;
++
+ 	/**
+      * Current phase 2 EAP method
+ 	 */
+@@ -245,11 +250,52 @@ METHOD(tls_application_t, process, status_t,
+ 	}
+ }
+ 
++/**
++ * Write a Diameter AVP (mandatory flag, no vendor) into the TLS tunnel.
++ */
++static void write_pap_avp(bio_writer_t *writer, uint32_t type, chunk_t data)
++{
++	char padding[] = { 0x00, 0x00, 0x00 };
++
++	writer->write_uint32(writer, type);
++	writer->write_uint8(writer, 0x40);
++	writer->write_uint24(writer, 8 + data.len);
++	writer->write_data(writer, data);
++	writer->write_data(writer, chunk_create(padding, (4 - data.len) % 4));
++}
++
+ METHOD(tls_application_t, build, status_t,
+ 	private_eap_ttls_peer_t *this, bio_writer_t *writer)
+ {
+ 	chunk_t data;
+ 
++	if (this->pap && this->start_phase2)
++	{
++		/* RFC 5281 PAP: send the identity and password in cleartext AVPs,
++		 * the TLS tunnel protects them. FortiGates configured for
++		 * EAP-TTLS/PAP (eap_method 2) expect this instead of a tunneled EAP
++		 * method. */
++		shared_key_t *shared;
++		chunk_t password;
++
++		shared = lib->credmgr->get_shared(lib->credmgr, SHARED_EAP,
++										  this->peer, this->server);
++		if (!shared)
++		{
++			DBG1(DBG_IKE, "no EAP key found for '%Y' - '%Y'",
++				 this->peer, this->server);
++			return FAILED;
++		}
++		password = shared->get_key(shared);
++		DBG1(DBG_IKE, "sending tunneled EAP-TTLS PAP for '%Y'", this->peer);
++		write_pap_avp(writer, RAT_USER_NAME,
++					  this->peer->get_encoding(this->peer));
++		write_pap_avp(writer, RAT_USER_PASSWORD, password);
++		shared->destroy(shared);
++		this->start_phase2 = FALSE;
++		return INVALID_STATE;
++	}
++
+ 	if (this->method == NULL && this->start_phase2)
+ 	{
+ 		/* generate an EAP Identity response */
+@@ -326,6 +372,8 @@ eap_ttls_peer_t *eap_ttls_peer_create(identification_t *server,
+ 		.auth = auth_cfg_create(),
+ 		.avp = eap_ttls_avp_create(),
+ 	);
++	this->pap = lib->settings->get_bool(lib->settings,
++							"%s.plugins.eap-ttls.phase2_pap", FALSE, lib->ns);
+ 
+ 	return &this->public;
+ }
